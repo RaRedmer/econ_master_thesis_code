@@ -1,0 +1,1 @@
+All individual csv-files containing the minute-binned exchange rate for a single pair.

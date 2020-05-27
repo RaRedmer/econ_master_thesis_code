@@ -1,0 +1,11 @@
+*.csv
+*.csv.gz
+*.png
+logs
+models
+_alt
+.ipynb_checkpoints
+*.pkl
+*.pyc
+dataset-metadata.json
+.vscode
