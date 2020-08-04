@@ -8,6 +8,7 @@ from sklearn.model_selection import PredefinedSplit
 from scipy.stats.mstats import gmean
 from copy import deepcopy
 from dataclasses import dataclass
+import glob
 
 #%%      
 class Backtest:
@@ -43,20 +44,20 @@ class Backtest:
             self.trading_signals[ f"max_{column}" ] = self.trading_signals[ f"{column}" ].max(axis=1)
             self.trading_signals[ f"max_{column}_pair" ] = self.trading_signals[ f"{column}" ].idxmax(axis=1)
 
-        self.trading_signals = self.trading_signals.head(400) #### REMOVE
+        # self.trading_signals = self.trading_signals.head(400) #### REMOVE
 
-    def equal_weight_holding_return(self, transaction_cost=0.003):
+    def get_equal_weight_holding_returns(self, transaction_cost=0.003):
         pairs = self.test_df.index.get_level_values("pair").unique().values
         data = {}
         for pair in pairs:
-            short_return = ( 1 + - self.test_df[ self.test_df.index.get_level_values("pair") == pair ][ "middle_return_1min" ] ).prod() - 1
-            long_return = ( 1 + self.test_df[ self.test_df.index.get_level_values("pair") == pair ][ "middle_return_1min" ] ).prod() - 1
-            data[ pair ] = [ short_return, long_return, (short_return + long_return) / 2 ]
-        equal_weight_long_return = np.mean( [ returns[0] for pair, returns in data.items() ] )
-        equal_weight_short_return = np.mean( [ returns[1] for pair, returns in data.items() ] )
-        mean_equal_weight_return = ( equal_weight_long_return + equal_weight_short_return ) / 2
-        data["equal_weight"] = [ equal_weight_long_return, equal_weight_short_return, mean_equal_weight_return ]
-        return pd.DataFrame.from_dict(data, orient="index", columns=[ "long_return", "short_return", "mean_return" ]) - transaction_cost
+            pair_df = self.test_df[ self.test_df.index.get_level_values("pair") == pair ].sort_index()
+            start_price = pair_df.iloc[0]["middle_median"]
+            end_price = pair_df.iloc[-1]["middle_median"]
+
+            short_return = -(end_price - start_price) / start_price
+            long_return = (end_price - start_price) / start_price
+            data[ pair ] = [ short_return, long_return]
+        return pd.DataFrame.from_dict(data, orient="index", columns=[ "long_return", "short_return"]) - transaction_cost
                    
     def conduct_top_short_long_alg(self, threshold=0, positions=120, transaction_cost=0.003, delta=120, position_type="both", skip_zero_volume=True):
         """ Simulate trading on the submitted trading data and generated trading-signals by the respective model.
@@ -114,12 +115,16 @@ class TopLongShortStrategy:
     def _get_return(self):
         """ Calculate return of current position depending on the type of position ie long or short
         """
-        return_factor = 1 if self._position_state["type"] == "long" else -1
-        return (
-            (self._position_state["close_price"] - self._position_state["open_price"]) * return_factor
-            / self._position_state["open_price"] 
-            - self._transaction_cost
-        )
+        if self._position_state["type"] == "long":
+            return (
+                (self._position_state["close_price"] - self._position_state["open_price"])
+                / self._position_state["open_price"] 
+            )
+        elif self._position_state["type"] == "short":
+            return (
+                (self._position_state["open_price"] - self._position_state["close_price"])
+                / self._position_state["close_price"] 
+            )
 
     def _close_position(self):
         """ Calculate return of current position and then close it ie reset the position's attributes  """
@@ -176,8 +181,7 @@ class TopLongShortStrategy:
 
     def conduct_strategy(self, threshold=0, skip_zero_volume=False, transaction_cost=0.003, execution_gap=1, position_type="both"):
         threshold = 1 / self.states if not threshold else threshold
-
-        
+       
         self._total_position_data = []
         self._transaction_cost = transaction_cost
         self._skip_zero_volume = skip_zero_volume
@@ -267,7 +271,9 @@ class TopLongShortStrategy:
                 if self._position_state["pair"]:
                     self._close_position()
 
-        return pd.DataFrame(self._total_position_data)
+        trading_results_df = pd.DataFrame(self._total_position_data).sort_values( ["position_num", "type"] )
+        trading_results_df["transaction_cost"] = self._transaction_cost
+        return trading_results_df
     
 
 @dataclass    
@@ -322,6 +328,30 @@ class Position:
         finally:
             cls.reset()
 
+#%%
+
+def get_total_return(returns_df, costs_bps=[]):
+    costs_bps = [ x*0.0005 for x in range(0, 5) ] if not costs_bps else costs_bps
+    # get growth rate for all bps
+    for cost in costs_bps:
+        returns_df[f"return_growth_rate_{ int( cost * 10**4 ) }bps"] = np.where(
+            returns_df["type"] == "long",
+            (returns_df["close_price"] / returns_df["open_price"]) * (1 - cost) / (1 + cost),
+            (returns_df["open_price"] / returns_df["close_price"]) * (1 - cost) / (1 + cost)
+        )
+    # aggregate over each position and its short/long-positions
+    position_returns_df = (
+        returns_df
+        .groupby( ["position_num", "type"] )
+        # multiply each 
+        .agg(
+            **{ f"total_return_{ int( cost * 10**4 ) }bps": (f"return_growth_rate_{ int( cost * 10**4 ) }bps", "prod") for cost in costs_bps }
+        )
+        # turn growth rate to 
+        - 1
+    )
+#     # aggregate overeach position's total return
+    return position_returns_df.groupby(level="type").agg("mean")
 
 #%%
 ##### TEST ######
@@ -343,51 +373,76 @@ test_data_df = top10_1min_df[
 
 #%%
 # create test and training data
-target = "future_2state_movement_120min"
 return_colum = "future_return_120min_constraint"
-x_columns = [ col for col in  top10_1min_df.columns if "return" in col and "future" not in col ]
+x_columns = [ col for col in  top10_1min_df.columns if "middle_return" in col and "future" not in col ]
+x_columns_volume = [ col for col in  top10_1min_df.columns if ("middle_return" in col or "volume_scaled" in col) and "future" not in col ]
+
+column_specs = {
+    "no_volume": x_columns,
+    # "with_volume": x_columns_volume,
+}
 # test data from 2019-11-01 to 2019-12-31
 # x_test = top10_1min_df[ (top10_1min_df.index.get_level_values("time") >= "2019-11-01") ][x_columns]
-x_test = top10_1min_df[ (top10_1min_df.index.get_level_values("time") >= "2019-11-01") ][x_columns]
-y_test = top10_1min_df[ (top10_1min_df.index.get_level_values("time") >= "2019-11-01")  ][target]
+
 
 #%%
-# get predictions
-clf = joblib.load(f"../models/logistic/logistic_1min_2state_no_volume_ps_120min.pkl")
-predictions = clf.predict_proba( x_test )
+THRESHOLDS = [0.5, 0.525, 0.55, 0.575, 0.6, 0.625, 0.65, 0.675]
+
+targets = {
+    "future_2state_movement_120min": 120,
+    "future_2state_movement_240min": 240,
+	# "future_3state_movement_120min": 120,
+    # "future_3state_movement_240min": 240,
+}
+
+models = ["logistic", "forest"]
+models = ["logistic"]
+# ["logistic", "forest", ]
+for model_name in models:
+    for column_spec_name, columns in column_specs.items():
+        for target, delta in targets.items():
+            print("load data:", model_name, column_spec_name, target)
+            x_test = top10_1min_df[ (top10_1min_df.index.get_level_values("time") >= "2019-11-01") ][columns]
+            y_test = top10_1min_df[ (top10_1min_df.index.get_level_values("time") >= "2019-11-01") ][target]            
+            # get predictions
+            clf = joblib.load(f"../models/{model_name}/{model_name}_{column_spec_name}_{target}.pkl")
+            predictions = clf.predict_proba( x_test )
+            # 
+            bt = Backtest(
+                test_df=test_data_df,
+                prediction_prob=predictions,
+                target_column=target, 
+                price_column="middle_median",
+                return_column=return_colum,
+            )
+            for threshold in THRESHOLDS:
+                print("Threshold:", threshold)
+                folder_file_paths = [ x for x in glob.glob1(f"../results/{model_name}/returns/", "*.csv") ]
+                file_path = f"../results/{model_name}/returns/trading_returns_{column_spec_name}_{target}_{ round(threshold*100, 1) }_threshold.csv"
+                if f"trading_returns_{column_spec_name}_{target}_{ round(threshold*100, 1) }_threshold.csv" not in folder_file_paths:
+                    trading_decisions_df = bt.conduct_top_short_long_alg(
+                        threshold=threshold,
+                        positions=60,
+                        skip_zero_volume=True,
+                        position_type="both",
+                        delta=delta,
+                        transaction_cost=0,
+                    )
+                    trading_decisions_df.to_csv(file_path, index=False)
+                    get_total_return(trading_decisions_df).to_csv(
+                        f"../results/{model_name}/stats/trading_returns_{column_spec_name}_{target}_{ round(threshold*100, 1) }_threshold.csv"
+                    )
+                else:
+                    print("Skip:", file_path)
 
 #%%
-bt = Backtest(
-    test_df=test_data_df,
-    prediction_prob=predictions,
-    target_column=target, 
-    price_column="middle_median",
-    return_column=return_colum,
-)
-#%%
-trading_decisions_df = bt.conduct_top_short_long_alg(
-    threshold=1/2,
-    positions=3,
-    skip_zero_volume=True,
-    position_type="both",
-    transaction_cost=0.003,
-)
 
 #%%
-equal_weight_return_df = bt.equal_weight_holding_return()
+equal_weight_return_df = bt.get_equal_weight_holding_returns(transaction_cost=0)
 
-#%%
+equal_weight_return_df.to_csv("../results/equal_weight_hold_returns.csv")
 
-#%%
-first_row_df = bt.trading_signals.iloc[ [0] ]
-#%%
 
-btc_return = test_data_df[ test_data_df.index.get_level_values("pair") == "btcusd" ]["middle_return_1min"]
-
-#%%
-# evaluation_df = bt.evaluate_top_short_long_strategy(skip_zero_volume=False)
-# evaluation_df = bt.evaluate_top_short_long_strategy(skip_zero_volume=False)
-# evaluation_df
 #%%
 
 #%%

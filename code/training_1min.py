@@ -6,8 +6,12 @@ import matplotlib.pyplot as plt
 import re
 from datetime import datetime
 
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.neural_network import MLPClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+
 from sklearn.model_selection import PredefinedSplit
 from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import plot_confusion_matrix
@@ -20,6 +24,7 @@ from util.report import write_results
 
 #%%
 TOP_10_CAPITALIZATION = ['btcusd', 'ethusd', 'eosusd', 'ltcusd', 'xrpusd', 'babusd', 'xmrusd', 'neousd', 'iotusd', "dshusd"]
+#%%
 def report_results(model, model_name, description, x_test, y_test, plot_per_pair=False):
     test_score = model.score(x_test, y_test)
     print(f"validation score: {model.best_score_}")
@@ -42,7 +47,7 @@ def report_results(model, model_name, description, x_test, y_test, plot_per_pair
         normalize="true",
     )
     disp.ax_.set_title(f"Confusion Matrix of {model_name} using all pairs\nAccuracy: {round(test_score, 4)}")
-    disp.figure_.savefig(f"./results/{model_name}/confusion_matrix_{description}.png")
+    disp.figure_.savefig(f"./results/{model_name}/plots/confusion_matrix_{description}.png")
 
     if plot_per_pair:
         # create plot for each pair and save stats
@@ -66,6 +71,8 @@ def report_results(model, model_name, description, x_test, y_test, plot_per_pair
             disp.figure_.savefig(f"./results/{model_name}/plots/confusion_matrix_{pair}_{description}.png")
 
         pd.DataFrame.from_dict(stats_data).to_csv(f"./results/{model_name}/stats/{model_name}_stats_by_pair_{description}.csv", index=False)
+
+#%%
 print("Load data")
 # load 1min-binned data for the top ten pairs
 top10_1min_df = pd.read_csv(
@@ -79,15 +86,21 @@ top10_1min_df = pd.read_csv(
 #%%
 # create training- and test-set
 # take only return-columns for training
-x_columns = [ col for col in  top10_1min_df.columns if "return" in col and "future" not in col ]
-x_columns_volume = [ col for col in  top10_1min_df.columns if ("return" in col or "volume" in col) and "future" not in col ]
+x_columns = [ col for col in  top10_1min_df.columns if "middle_return" in col and "future" not in col ]
+x_columns_volume = [ col for col in  top10_1min_df.columns if ("middle_return" in col or "volume_scaled" in col) and "future" not in col ]
 feature_selections = {
     "no_volume": x_columns,
     "with_volume": x_columns_volume,
 }
+
+
+
+dt = DecisionTreeClassifier(random_state = 0)
 models = {
     "forest": RandomForestClassifier(random_state=0, max_features="sqrt"),
     "logistic": LogisticRegression(solver="lbfgs", max_iter=150),
+    "adaboost": AdaBoostClassifier(base_estimator=dt),
+    "ann": MLPClassifier(random_state=0),
 }
 search_spaces = {
     "forest": {
@@ -97,23 +110,35 @@ search_spaces = {
     "logistic": {
         "logistic__C": np.logspace(np.log10(0.0001), np.log10(10000), num=100)
     },
+    "adaboost": {
+        # "adaboost__n_estimators": [50, 100, 200,],
+        "adaboost__n_estimators": [500, 1000],
+        "adaboost__learning_rate": [0.001, 0.01, 0.1],
+        "adaboost__base_estimator__max_depth": [1, 3],
+        "adaboost__base_estimator__max_features": [None],
+    },
 }
+
 #%%
-targets = ["3state_movement_120min_30bps", 
-            "2state_up_movement_120min_30bps",
-            "2state_down_movement_120min_30bps", 
-            "2state_movement_120min"]
-skip_list = []
+targets = [
+    "2state_movement_120min",
+    "2state_movement_240min",	
+	# "3state_movement_120min",
+    # "3state_movement_240min"
+]
+
+filtered_1min_df = (
+    top10_1min_df
+    [ top10_1min_df[ f"volume"].shift(-1) != 0 ]
+    .dropna()
+)
+total_size = filtered_1min_df.shape[0]
+#%%
 for volume_desc, columns in feature_selections.items():
     for target in targets:
         target = "future_" + target
-        print(target)
-        # filter out bins for which in the respcetive next bin no volume was traded and NaN
-        filtered_1min_df = (
-            top10_1min_df
-            [ top10_1min_df[ f"volume_scaled"].shift(-1) != 0 ]
-            .dropna()
-        )            
+        print("Target:", target, "Features:", volume_desc)
+        # filter out bins for which in the respective next bin no volume was traded and NaN
         # training data from 2019-01-01 to 2019-10-31
         x_train = filtered_1min_df[ (filtered_1min_df.index.get_level_values("time") < "2019-11-01") ][columns]
         y_train = filtered_1min_df[ (filtered_1min_df.index.get_level_values("time") < "2019-11-01") ][target]
@@ -122,29 +147,64 @@ for volume_desc, columns in feature_selections.items():
         y_test = filtered_1min_df[ (filtered_1min_df.index.get_level_values("time") >= "2019-11-01") ][target]
 
         # set validation fold
-        validation_fold = ( [ -1 for x in y_train[ (y_train.index.get_level_values("time") < "2019-09-15") ] ] 
-                          + [ 0 for x in y_train[ (y_train.index.get_level_values("time") >= "2019-09-15") ] ] )
-        ps = PredefinedSplit(validation_fold)
+        non_validation_fold = [ -1 for x in y_train[ (y_train.index.get_level_values("time") < "2019-09-15") ] ] 
+        validation_fold = [ 0 for x in y_train[ (y_train.index.get_level_values("time") >= "2019-09-15") ] ]
+        ps = PredefinedSplit( non_validation_fold + validation_fold )
+        print("Total Size:", total_size,
+            "Training Set Size:", x_train.shape,
+            "Validation Set Size:", len(validation_fold),
+            "Test Set Size:", x_test.shape)
         # ["logistic", "forest"]
-        for model_name in ["logistic"]:
+        description = f"{volume_desc}_{target}"
+        for model_name in ["ann"]:
+            filename = f"./models/{model_name}/{model_name}_{description}.pkl"
             print(f"Train {model_name}")
-            if target in skip_list:
-                print(f"Skip {target}")
-            else:                        
-                model = models[ model_name ]
+
+
+            model = models[ model_name ]
+            if model_name != "ann":
                 clf_pipline = Pipeline(
                     [("scaler", QuantileTransformer(random_state=0)),
                     (model_name, model)]
-                )
+                )          
                 searchcv = GridSearchCV(
                     clf_pipline,
                     param_grid=search_spaces[ model_name ],
                     cv=ps,
-                    n_jobs=10,
+                    n_jobs=6,
                     verbose=10,
                 )
                 searchcv.fit(x_train, y_train)
-                joblib.dump(searchcv, f"./models/{model_name}/{model_name}_{target}.pkl")
+                joblib.dump(searchcv, filename)
+                report_results(searchcv, model_name, description, x_test, y_test)          
+            else:
+                search_spaces.update(
+                    {
+                        "ann": {
+                            "hidden_layer_sizes": (x_train.shape[1], x_train.shape[1], 15, 10),
+                            "activation": "relu",
+                            "solver": "sgd",
+                            "alpha": 10**-4,
+                            "verbose": 50,
+                            "batch_size": 512,
+                            "max_iter": 400,
+                            "tol": 10**-4,
+                            "n_iter_no_change": 400,
+                            "random_state": 0,
+                        }
+                    }
+                )
+                model = MLPClassifier(**search_spaces["ann"])
+                clf_pipline = Pipeline(
+                    [("scaler", QuantileTransformer(random_state=0)),
+                    ("ann", model)]
+                ) 
+                clf_pipline.fit(x_train, y_train)
+                joblib.dump(clf_pipline, filename)
+                # report_results(clf_pipline, model_name, description, x_test, y_test)
 
-                report_results(searchcv, model_name, target, x_test, y_test)            
+              
 
+
+
+# %%
