@@ -1,0 +1,1 @@
+Logistic Regression models only trained on BTC

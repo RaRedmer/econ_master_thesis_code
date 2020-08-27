@@ -2,7 +2,6 @@
 *.csv.gz
 *.png
 logs
-models
 _alt
 .ipynb_checkpoints
 *.pkl

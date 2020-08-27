@@ -1,0 +1,1 @@
+DNN models only trained on BTC
