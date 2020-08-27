@@ -59,7 +59,7 @@ class Backtest:
             data[ pair ] = [ short_return, long_return]
         return pd.DataFrame.from_dict(data, orient="index", columns=[ "long_return", "short_return"]) - transaction_cost
                    
-    def conduct_top_short_long_alg(self, threshold=0, positions=120, transaction_cost=0.003, delta=120, position_type="both", skip_zero_volume=True):
+    def conduct_top_short_long_alg(self, threshold=0, positions=120, transaction_cost=0.003, delta=120, position_type="both", skip_zero_volume=True, pair=""):
         """ Simulate trading on the submitted trading data and generated trading-signals by the respective model.
             DISCLAIMER: As of right now, only single long position.
             (outlined in more detail in chapter ???)
@@ -79,7 +79,10 @@ class Backtest:
                 pd.DataFrame: Returns for each trade made for each position
         """        
         ts = TopLongShortStrategy(trading_signals=self.trading_signals, positions=positions, delta=delta)
-        position_return_df =  ts.conduct_strategy(threshold, skip_zero_volume, transaction_cost, position_type=position_type)
+        if pair:
+            position_return_df =  ts.conduct_strategy(threshold, skip_zero_volume, transaction_cost, position_type=position_type)
+        else:
+            position_return_df =  ts.conduct_alternative_strategy(threshold, skip_zero_volume, transaction_cost, position_type=position_type, pair=pair)
         return position_return_df
 
 
@@ -462,8 +465,8 @@ x_columns = [ col for col in  top10_1min_df.columns if "middle_return" in col an
 x_columns_volume = [ col for col in  top10_1min_df.columns if ("middle_return" in col or "volume_scaled" in col) and "future" not in col ]
 
 column_specs = {
-    "no_volume": x_columns,
-    # "with_volume": x_columns_volume,
+    # "no_volume": x_columns,
+    "with_volume": x_columns_volume,
 }
 # test data from 2019-11-01 to 2019-12-31
 # x_test = top10_1min_df[ (top10_1min_df.index.get_level_values("time") >= "2019-11-01") ][x_columns]
@@ -483,13 +486,16 @@ models = ["logistic", "forest"]
 models = ["logistic"]
 # ["logistic", "forest", ]
 for model_name in models:
-    for column_spec_name, columns in column_specs.items():
+    for feature_spec, columns in column_specs.items():
         for target, delta in targets.items():
-            print("load data:", model_name, column_spec_name, target)
+            model_file_name = f"alternative_{model_name}_btcusd_{feature_spec}_{target}"
+            model_file_path = f"../models/alternative/{model_name}/{model_file_name}.pkl"            
+            print("load data:", model_name, feature_spec, target)
             x_test = top10_1min_df[ (top10_1min_df.index.get_level_values("time") >= "2019-11-01") ][columns]
             y_test = top10_1min_df[ (top10_1min_df.index.get_level_values("time") >= "2019-11-01") ][target]            
             # get predictions
-            clf = joblib.load(f"../models/{model_name}/{model_name}_{column_spec_name}_{target}.pkl")
+            print("load model:", model_file_name)
+            clf = joblib.load(model_file_path)
             predictions = clf.predict_proba( x_test )
             # 
             bt = Backtest(
@@ -501,21 +507,20 @@ for model_name in models:
             )
             for threshold in THRESHOLDS:
                 print("Threshold:", threshold)
-                folder_file_paths = [ x for x in glob.glob1(f"../results/{model_name}/returns/", "*.csv") ]
-                file_path = f"../results/{model_name}/returns/trading_returns_{column_spec_name}_{target}_{ round(threshold*100, 1) }_threshold.csv"
-                if f"trading_returns_{column_spec_name}_{target}_{ round(threshold*100, 1) }_threshold.csv" not in folder_file_paths:
+                folder_file_names = [ x for x in glob.glob1(f"../results/alternative/{model_name}/returns/", "*.csv") ]
+                file_name = f"trading_returns_{feature_spec}_{target}_{ round(threshold*100, 1) }_threshold"
+                file_path = f"../results/alternative/{model_name}/returns/{file_name}.csv"
+                if f"{file_name}.csv" not in folder_file_names:
                     trading_decisions_df = bt.conduct_top_short_long_alg(
                         threshold=threshold,
-                        positions=60,
+                        positions=20,
                         skip_zero_volume=True,
                         position_type="both",
                         delta=delta,
                         transaction_cost=0,
+                        pair="btcusd",
                     )
                     trading_decisions_df.to_csv(file_path, index=False)
-                    get_total_return(trading_decisions_df).to_csv(
-                        f"../results/{model_name}/stats/trading_returns_{column_spec_name}_{target}_{ round(threshold*100, 1) }_threshold.csv"
-                    )
                 else:
                     print("Skip:", file_path)
 
