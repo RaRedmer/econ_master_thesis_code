@@ -20,57 +20,10 @@ from sklearn.preprocessing import QuantileTransformer
 from sklearn.pipeline import make_pipeline
 from sklearn.pipeline import Pipeline
 
-from util.report import write_results
+# from util.report import write_results
 
 #%%
 TOP_10_CAPITALIZATION = ['btcusd', 'ethusd', 'eosusd', 'ltcusd', 'xrpusd', 'babusd', 'xmrusd', 'neousd', 'iotusd', "dshusd"]
-#%%
-def report_results(model, model_name, description, x_test, y_test, plot_per_pair=False):
-    test_score = model.score(x_test, y_test)
-    print(f"validation score: {model.best_score_}")
-    print(f"test score: {test_score}")
-
-    train_start = str(y_train.index[0][0])
-    train_end = str(y_train.index[-1][0])
-    test_start = str(y_test.index[0][0])
-    test_end = str(y_test.index[-1][0])
-
-    write_results(path=f"./results/{model_name}/stats/{model_name}_training_results.txt", 
-                entry_text=f"{description}, validation score: {model.best_score_}, test score: {test_score}, training-range: {train_start} to {train_end}, test-range: {test_start} to {test_end}")
-
-    # save figure
-    disp = plot_confusion_matrix(
-        model, 
-        x_test, y_test,   
-        # display_labels=["Down", "Up"],
-        cmap=plt.cm.Blues,
-        normalize="true",
-    )
-    disp.ax_.set_title(f"Confusion Matrix of {model_name} using all pairs\nAccuracy: {round(test_score, 4)}")
-    disp.figure_.savefig(f"./results/{model_name}/plots/confusion_matrix_{description}.png")
-
-    if plot_per_pair:
-        # create plot for each pair and save stats
-        stats_data = {"pair": [], "test_score": []}
-        for pair in TOP_10_CAPITALIZATION:
-            x_test_ =  x_test[ x_test.index.get_level_values("pair") == pair ]
-            y_test_ = y_test[ y_test.index.get_level_values("pair") == pair ]
-            test_score_ = model.score(x_test_, y_test_)
-            disp = plot_confusion_matrix(
-                model, 
-                x_test_, y_test_,
-                # display_labels=["Down", "Up"],
-                cmap=plt.cm.Blues,
-                normalize="true",
-            )
-            # add score to stats_data
-            stats_data[ "pair" ].append(pair)
-            stats_data[ "test_score" ].append(test_score_)
-            
-            disp.ax_.set_title(f"Confusion Matrix of {model_name} for {pair}\nAccuracy: {round(test_score_, 4)}")
-            disp.figure_.savefig(f"./results/{model_name}/plots/confusion_matrix_{pair}_{description}.png")
-
-        pd.DataFrame.from_dict(stats_data).to_csv(f"./results/{model_name}/stats/{model_name}_stats_by_pair_{description}.csv", index=False)
 
 #%%
 print("Load data")
@@ -122,12 +75,6 @@ search_spaces = {
 }
 
 #%%
-# targets = [
-#     "future_2state_movement_120min",
-#     "future_2state_movement_120min",	
-# 	# "3state_movement_120min",
-#     # "3state_movement_240min"
-# ]
 
 targets = ["future_return_sign_120min", "future_return_sign_240min"]
 
@@ -191,7 +138,6 @@ for model_name, model in models.items():
                         )
                         searchcv.fit(x_train, y_train)
                         joblib.dump(searchcv, file_path)
-                        # report_results(searchcv, model_name, description, x_test, y_test)
                     else:
                         search_spaces.update(
                             {
@@ -216,7 +162,6 @@ for model_name, model in models.items():
                         ) 
                         clf_pipline.fit(x_train, y_train)
                         joblib.dump(clf_pipline, file_path)
-                        # report_results(clf_pipline, model_name, description, x_test, y_test)
 
                 else:
                     print(f"Model-file already exists:", filename)

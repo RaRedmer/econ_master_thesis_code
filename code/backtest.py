@@ -360,58 +360,6 @@ class TopLongShortStrategy:
         return trading_results_df
     
 
-@dataclass    
-class Position:
-    position_num: int
-    type: str
-    pair: str = np.NaN
-    transaction_cost: int = 0.003
-    open_row_num: int = np.NaN
-    open_time: datetime = np.NaN
-    open_price: float = np.NaN
-    duration: int = np.NaN
-    close_time: datetime = np.NaN
-    close_price: float = np.NaN
-    close_return: float = np.NaN
-
-    def open(self, bin, pair):
-        pass
-
-    def _get_return(self):
-        """ Calculate return of current position depending on the type of position ie long or short
-        """
-        return_factor = 1 if self.type == "long" else -1
-        return (
-            (self.close_price - self.open_price) * return_factor
-            / self.open_price
-            - self.transaction_cost
-        )
-
-
-    @classmethod
-    def reset(cls):
-        _position_num = deepcopy( cls.position_num )
-        _type = deepcopy( cls.type )
-        cls.instance = None        
-
-        cls.instance = Position(position_num = _position_num, type = _type)
-
-    @classmethod
-    def close(cls, _bin):
-        """ Calculate return of current position and then close it ie reset the position's attributes  """
-        # skip min-bins until volume is not zero
-        # self._skip_to_non_zero_volume_row(self._position_state["pair"])
-
-        cls.instance.close_price = _bin["middle_median"][ cls.pair ][0]
-        cls.instance.close_return = cls.instance._get_return()
-        cls.instance.close_time = _bin.index[0]
-        cls.instance.duration = pd.Timedelta(cls.open_time - cls.close_time).seconds / 60.0
-
-        try:
-            return cls.instance.asdict()
-        finally:
-            cls.reset()
-
 #%%
 
 def get_total_return(returns_df, costs_bps=[]):
@@ -465,18 +413,13 @@ column_specs = {
     "no_volume": x_columns,
     # "with_volume": x_columns_volume,
 }
-# test data from 2019-11-01 to 2019-12-31
-# x_test = top10_1min_df[ (top10_1min_df.index.get_level_values("time") >= "2019-11-01") ][x_columns]
-
 
 #%%
-THRESHOLDS = [0.5, 0.525, 0.55, 0.575, 0.6, 0.625, 0.65, 0.675]
+THRESHOLDS = [0.5, 0.525, 0.55, 0.575, 0.6, 0.625, 0.65, 0.675, 0.7, 0.725, 0.75, 0.775, 0.8]
 
 targets = {
     "future_2state_movement_120min": 120,
     "future_2state_movement_240min": 240,
-	# "future_3state_movement_120min": 120,
-    # "future_3state_movement_240min": 240,
 }
 
 models = ["logistic", "forest"]
@@ -520,13 +463,6 @@ for model_name in models:
                     print("Skip:", file_path)
 
 #%%
-
-#%%
 equal_weight_return_df = bt.get_equal_weight_holding_returns(transaction_cost=0)
 
 equal_weight_return_df.to_csv("../results/equal_weight_hold_returns.csv")
-
-
-#%%
-
-#%%
